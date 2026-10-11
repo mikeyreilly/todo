@@ -283,9 +283,7 @@ export function App() {
   return (
     <main class="todo-app">
       <header class="page-header">
-        <p class="eyebrow">ONE THING AT A TIME</p>
-        <h1>Your todos.</h1>
-        <p class="subtitle">A little less on your mind. A little more done.</p>
+        <h1>To Do</h1>
       </header>
 
       <section class="todo-card" aria-label="Todo list">
@@ -296,7 +294,7 @@ export function App() {
               value={description} onInput={(event) => setDescription(event.currentTarget.value)}
               maxLength={255} required disabled={createLocked} />
             <button type="submit" disabled={createLocked || !description.trim()}>
-              {creation.pending ? 'Adding…' : 'Add todo'}
+              {creation.pending ? 'Adding…' : 'Add'}
             </button>
           </div>
           {creation.error && <p class="error" role="alert">{creation.error}</p>}
@@ -339,7 +337,7 @@ export function App() {
           </>
         )}
       </section>
-      <footer class="page-footer">Small steps count.</footer>
+      
     </main>
   )
 }

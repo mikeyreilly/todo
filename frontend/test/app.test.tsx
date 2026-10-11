@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { App } from './app'
+import { App } from '../src/app'
 
 const todo = { id: '01a12b40-8ad1-75c6-a653-1be68d332b0a', description: 'Buy milk', completed: false }
 const fetchMock = vi.fn<typeof fetch>()
@@ -39,7 +39,7 @@ describe('Todo app', () => {
     fetchMock.mockResolvedValueOnce(response(todo, 201))
     const input = screen.getByLabelText('What needs doing?') as HTMLInputElement
     await user.type(input, '  Buy milk  ')
-    await user.click(screen.getByRole('button', { name: 'Add todo' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
     expect(await screen.findByText('Buy milk')).toBeTruthy()
     expect(input.value).toBe('')
     expect(fetchMock.mock.calls[1]).toEqual(['/todos', {
@@ -107,11 +107,11 @@ describe('Todo app', () => {
     const user = await renderList([])
     const input = screen.getByLabelText('What needs doing?') as HTMLInputElement
     await user.type(input, '   ')
-    expect((screen.getByRole('button', { name: 'Add todo' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true)
     await user.clear(input)
     await user.type(input, 'Buy milk')
     fetchMock.mockResolvedValueOnce(response({ detail: 'Database unavailable' }, 503))
-    await user.click(screen.getByRole('button', { name: 'Add todo' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Database unavailable')
     expect(input.value).toBe('Buy milk')
     expect(screen.queryByText('Buy milk')).toBeNull()
@@ -291,7 +291,7 @@ describe('Action and drag regressions', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('Try later')
     expect(input.value).toBe('Buy milk')
     fetchMock.mockResolvedValueOnce(response(todo, 201))
-    await user.click(screen.getByRole('button', { name: 'Add todo' }))
+    await user.click(screen.getByRole('button', { name: 'Add' }))
     expect(await screen.findByText('Buy milk')).toBeTruthy()
     expect(screen.queryByRole('alert')).toBeNull()
   })
