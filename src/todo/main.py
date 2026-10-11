@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from psycopg import Connection
+from psycopg.errors import NoDataFound
 from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
 
 from todo.database import Settings, create_pool, get_connection
@@ -36,6 +37,12 @@ class TodoUpdate(BaseModel):
         return self
 
 
+class TodoOrder(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    before_id: UUID | None
+
+
 class Todo(BaseModel):
     id: UUID
     description: str
@@ -58,16 +65,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/todos", response_model=list[Todo])
     def list_todos(connection: Database):
         return connection.execute(
-            "SELECT id, description, completed FROM todo ORDER BY id"
+            "SELECT id, description, completed FROM todo ORDER BY priority, id"
         ).fetchall()
 
     @app.post("/todos", response_model=Todo, status_code=status.HTTP_201_CREATED)
     def create_todo(todo: TodoCreate, connection: Database):
+        # Serialize writers until commit so concurrent creates see the latest max.
+        connection.execute("LOCK TABLE todo IN SHARE ROW EXCLUSIVE MODE")
         return connection.execute(
-            "INSERT INTO todo (description, completed) VALUES (%s, %s) "
+            "INSERT INTO todo (description, completed, priority) "
+            "SELECT %s, %s, COALESCE(MAX(priority), 0) + 1024 FROM todo "
             "RETURNING id, description, completed",
             (todo.description, todo.completed),
         ).fetchone()
+
+    @app.patch("/todos/{todo_id}/order", response_model=Todo)
+    def reorder_todo(todo_id: UUID, order: TodoOrder, connection: Database):
+        try:
+            return connection.execute(
+                "SELECT id, description, completed FROM reorder_todo(%s, %s)",
+                (todo_id, order.before_id),
+            ).fetchone()
+        except NoDataFound as error:
+            raise HTTPException(
+                status_code=404, detail=error.diag.message_primary
+            ) from error
 
     @app.patch("/todos/{todo_id}", response_model=Todo)
     def update_todo(todo_id: UUID, todo: TodoUpdate, connection: Database):

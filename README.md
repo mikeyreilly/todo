@@ -38,9 +38,10 @@ Interactive API documentation: http://127.0.0.1:8000/docs.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/todos` | List all todos, ordered by UUID |
+| GET | `/todos` | List all todos, ordered by priority (then UUID) |
 | POST | `/todos` | Create a todo; returns 201 |
 | PATCH | `/todos/{id}` | Edit description and/or completion; returns 404 if missing |
+| PATCH | `/todos/{id}/order` | Move before another todo, or to the end |
 
 Each todo contains `id` (UUID), `description`, and `completed` (boolean).
 Descriptions are trimmed and must contain 1–255 characters. Creation requires a
@@ -56,6 +57,17 @@ curl -X PATCH http://127.0.0.1:8000/todos/REPLACE_WITH_UUID \
   -H 'Content-Type: application/json' \
   -d '{"completed":true}'
 ```
+
+Reordering requires `{"before_id":"TARGET_UUID"}`, or `{"before_id":null}` to move
+to the end. Missing items or targets return 404; missing/invalid fields return 422.
+Moving before itself or to its current position is a successful no-op. Priorities
+are server-managed: new todos receive the maximum priority + 1024 (starting at
+1024), and moves use the available gaps. When a gap is exhausted, the server
+restores 1024-point spacing. Creates and reorders are serialized in transactions.
+Reordering runs in the PostgreSQL `reorder_todo(uuid, uuid)` function, including
+locking and rebalancing, so the endpoint uses one database call. Apply the new
+migration with `uv run poe migrations` before using it. The response is the moved
+todo, with the same fields as other todo responses.
 
 This API has no authentication; all callers share the same todo list.
 
