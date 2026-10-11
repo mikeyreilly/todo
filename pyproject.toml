@@ -22,3 +22,10 @@ build-backend = "uv_build"
 dev = [
     "poethepoet>=0.48.0",
 ]
+
+[tool.poe.tasks]
+migrations	= "npx dbmate up"
+server		= "uv run fastapi dev src/todo/main.py"
+
+[tool.poe.tasks.dev-start]
+sequence	= ["migrations", "server"]
