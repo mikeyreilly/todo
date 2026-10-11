@@ -33,23 +33,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 export const listTodos = (signal?: AbortSignal) =>
   request<Todo[]>('/todos', { signal })
 
-export const createTodo = (description: string) =>
-  request<Todo>('/todos', {
-    method: 'POST',
+const writeTodo = (path: string, body: unknown, method = 'PATCH') =>
+  request<Todo>(path, {
+    method,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ description }),
+    body: JSON.stringify(body),
   })
+
+export const createTodo = (description: string) =>
+  writeTodo('/todos', { description }, 'POST')
 
 export const updateTodo = (id: string, changes: TodoChanges) =>
-  request<Todo>(`/todos/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(changes),
-  })
+  writeTodo(`/todos/${encodeURIComponent(id)}`, changes)
 
 export const reorderTodo = (id: string, beforeId: string | null) =>
-  request<Todo>(`/todos/${encodeURIComponent(id)}/order`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ before_id: beforeId }),
-  })
+  writeTodo(`/todos/${encodeURIComponent(id)}/order`, { before_id: beforeId })

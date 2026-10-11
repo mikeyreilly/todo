@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './app'
@@ -273,4 +273,92 @@ describe('Reordering todos', () => {
     await waitFor(() => expect(descriptions()).toEqual(['Read book', 'Buy milk', 'Walk dog']))
   })
 
+})
+
+describe('Action and drag regressions', () => {
+  it('prevents duplicate creation while preserving a failed draft for retry', async () => {
+    const user = await renderList([])
+    const input = screen.getByLabelText('What needs doing?') as HTMLInputElement
+    await user.type(input, 'Buy milk')
+    let finish!: (value: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve }))
+    const form = input.closest('form')!
+    fireEvent.submit(form)
+    fireEvent.submit(form)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(input.disabled).toBe(true)
+    finish(response({ detail: 'Try later' }, 503))
+    expect((await screen.findByRole('alert')).textContent).toBe('Try later')
+    expect(input.value).toBe('Buy milk')
+    fetchMock.mockResolvedValueOnce(response(todo, 201))
+    await user.click(screen.getByRole('button', { name: 'Add todo' }))
+    expect(await screen.findByText('Buy milk')).toBeTruthy()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('supports Escape and blank drafts without losing the saved description', async () => {
+    const user = await renderList()
+    await user.click(screen.getByRole('button', { name: 'Edit Buy milk' }))
+    const input = screen.getByLabelText('Edit description')
+    await user.clear(input)
+    await user.type(input, '   ')
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.submit(input.closest('form')!)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await user.keyboard('{Escape}')
+    expect(screen.queryByLabelText('Edit description')).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Edit Buy milk' }))
+    expect((screen.getByLabelText('Edit description') as HTMLInputElement).value).toBe('Buy milk')
+  })
+
+  it('guards duplicate edits and retains an in-flight edit when order changes', async () => {
+    const user = await renderList(ordered)
+    await user.click(screen.getByRole('button', { name: 'Edit Buy milk' }))
+    const input = screen.getByLabelText('Edit description')
+    await user.clear(input)
+    await user.type(input, 'Buy bread')
+    let finish!: (value: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve }))
+    fireEvent.submit(input.closest('form')!)
+    fireEvent.submit(input.closest('form')!)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    fetchMock.mockResolvedValueOnce(response(third))
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Reorder Read book' }), { key: 'ArrowUp' })
+    await screen.findByText('Order saved.')
+    finish(response({ ...todo, description: 'Buy bread' }))
+    await waitFor(() => expect(descriptions()).toEqual(['Buy bread', 'Read book', 'Walk dog']))
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('aborts loading on unmount', async () => {
+    fetchMock.mockImplementationOnce((_path, options) => new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener('abort', () => reject(new DOMException('Cancelled', 'AbortError')))
+    }))
+    const { unmount } = render(<App />)
+    const signal = fetchMock.mock.calls[0][1]?.signal
+    unmount()
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it.each([12, -12])('scrolls at the viewport edge (%s) and cancels the animation', async (speed) => {
+    await renderList(ordered)
+    mockDragLayout()
+    vi.stubGlobal('innerHeight', 300)
+    vi.stubGlobal('scrollY', 100)
+    vi.spyOn(document.documentElement, 'scrollHeight', 'get').mockReturnValue(1000)
+    const scroll = vi.spyOn(window, 'scrollBy').mockImplementation(() => {})
+    const frames = vi.fn<typeof requestAnimationFrame>().mockReturnValue(42)
+    const cancel = vi.fn()
+    vi.stubGlobal('requestAnimationFrame', frames)
+    vi.stubGlobal('cancelAnimationFrame', cancel)
+    vi.mocked(screen.getByRole('list').getBoundingClientRect).mockReturnValue(
+      { left: 0, right: 500, top: 0, bottom: 1000, height: 1000 } as DOMRect)
+    const handle = startDrag(third.description, 250, speed > 0 ? 299 : 1)
+    await waitFor(() => expect(frames).toHaveBeenCalled())
+    act(() => frames.mock.calls[0][0](0))
+    expect(scroll).toHaveBeenCalledWith(0, speed)
+    fireEvent.pointerCancel(handle, { pointerId: 1 })
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith(42))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

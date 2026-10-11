@@ -20,6 +20,28 @@ type Drag = {
 type HandleEvents = Pick<JSX.HTMLAttributes<HTMLButtonElement>,
   'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onLostPointerCapture' | 'onKeyDown'>
 
+// Each action owns its error and guards overlapping calls, even before a render.
+function useAction() {
+  const [state, setState] = useState({ pending: false, error: '' })
+  const busy = useRef(false)
+  const reset = () => setState({ pending: false, error: '' })
+  async function run(action: () => Promise<void>) {
+    if (busy.current) return
+    busy.current = true
+    setState({ pending: true, error: '' })
+    let error = ''
+    try {
+      await action()
+    } catch (cause) {
+      error = errorMessage(cause)
+    } finally {
+      busy.current = false
+      setState({ pending: false, error })
+    }
+  }
+  return { ...state, busy, run, reset }
+}
+
 function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents }: {
   todo: Todo
   locked: boolean
@@ -28,29 +50,16 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
   handleEvents: HandleEvents
   onUpdate: (id: string, changes: TodoChanges) => Promise<void>
 }) {
-  const [editing, setEditing] = useState(false)
-  const [description, setDescription] = useState(todo.description)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-
-  async function save(changes: TodoChanges) {
-    if (saving) return
-    setSaving(true)
-    setError('')
-    try {
-      await onUpdate(todo.id, changes)
-      setEditing(false)
-    } catch (error) {
-      setError(errorMessage(error))
-    } finally {
-      setSaving(false)
-    }
-  }
-
+  const [description, setDescription] = useState<string | null>(null)
+  const editing = description !== null
+  const { pending: saving, error, run, reset } = useAction()
+  const save = (changes: TodoChanges) => run(async () => {
+    await onUpdate(todo.id, changes)
+    setDescription(null)
+  })
   function cancel() {
-    setEditing(false)
-    setDescription(todo.description)
-    setError('')
+    setDescription(null)
+    reset()
   }
 
   return (
@@ -103,8 +112,7 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
               aria-label={`Edit ${todo.description}`}
               onClick={() => {
                 setDescription(todo.description)
-                setError('')
-                setEditing(true)
+                reset()
               }}>
               {saving ? 'Saving…' : 'Edit'}
             </button>
@@ -122,22 +130,20 @@ export function App() {
   const [loadError, setLoadError] = useState('')
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [description, setDescription] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState('')
+  const creation = useAction()
   const [filter, setFilter] = useState<Filter>('all')
-  const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined)
-  const [reordering, setReordering] = useState(false)
-  const [orderError, setOrderError] = useState('')
-  const [orderStatus, setOrderStatus] = useState('')
+  const [dragPosition, setDragPosition] = useState<Pick<Drag, 'id' | 'beforeId'> | null>(null)
+  const draggingId = dragPosition?.id
+  const dropBefore = dragPosition?.beforeId
+  const order = useAction()
+  const [orderSaved, setOrderSaved] = useState(false)
+  const orderStatus = order.pending ? 'Saving order…' : order.error || !orderSaved ? '' : 'Order saved.'
   const listRef = useRef<HTMLUListElement>(null)
   const dragRef = useRef<Drag | null>(null)
-  const reorderPending = useRef(false)
 
   function cancelDrag() {
     dragRef.current = null
-    setDraggingId(null)
-    setDropBefore(undefined)
+    setDragPosition(null)
   }
 
   function updateDropPosition(drag: Drag) {
@@ -148,14 +154,12 @@ export function App() {
         drag.y < bounds.top - 16 || drag.y > bounds.bottom + 16) {
       drag.beforeId = undefined
     } else {
-      const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-todo-id]'))
-        .filter((row) => row.dataset.todoId !== drag.id)
-      drag.beforeId = rows.find((row) => {
+      drag.beforeId = Array.from(list.querySelectorAll<HTMLElement>('[data-todo-id]')).find((row) => {
         const rect = row.getBoundingClientRect()
-        return drag.y < rect.top + rect.height / 2
+        return row.dataset.todoId !== drag.id && drag.y < rect.top + rect.height / 2
       })?.dataset.todoId ?? null
     }
-    setDropBefore(drag.beforeId)
+    setDragPosition({ id: drag.id, beforeId: drag.beforeId })
   }
 
   // Pointer capture keeps events on the handle; scroll near viewport edges
@@ -182,15 +186,10 @@ export function App() {
     return () => cancelAnimationFrame(frame)
   }, [draggingId])
 
-  async function moveTodo(id: string, beforeId: string | null) {
-    if (reorderPending.current) return
+  function moveTodo(id: string, beforeId: string | null) {
     const index = todos.findIndex((todo) => todo.id === id)
     if (index < 0 || beforeId === id || (todos[index + 1]?.id ?? null) === beforeId) return
-    reorderPending.current = true
-    setReordering(true)
-    setOrderError('')
-    setOrderStatus('Saving order…')
-    try {
+    return order.run(async () => {
       await reorderTodo(id, beforeId)
       setTodos((current) => {
         const moving = current.find((todo) => todo.id === id)
@@ -200,20 +199,14 @@ export function App() {
         if (destination < 0) return current
         return [...rest.slice(0, destination), moving, ...rest.slice(destination)]
       })
-      setOrderStatus('Order saved.')
-    } catch (error) {
-      setOrderError(errorMessage(error))
-      setOrderStatus('')
-    } finally {
-      reorderPending.current = false
-      setReordering(false)
-    }
+      setOrderSaved(true)
+    })
   }
 
   function handleEvents(id: string): HandleEvents {
     return {
       onPointerDown(event) {
-        if (event.button !== 0 || creating || reorderPending.current || dragRef.current) return
+        if (event.button !== 0 || creation.busy.current || order.busy.current || dragRef.current) return
         dragRef.current = {
           id, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
           active: false, beforeId: undefined,
@@ -226,8 +219,7 @@ export function App() {
         if (!drag || drag.pointerId !== event.pointerId || !list) return
         if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return
         drag.active = true
-        setDraggingId(id)
-        setOrderStatus('')
+        setOrderSaved(false)
         event.preventDefault()
         drag.x = event.clientX
         drag.y = event.clientY
@@ -266,21 +258,15 @@ export function App() {
     return () => controller.abort()
   }, [loadAttempt])
 
-  async function addTodo() {
+  function addTodo() {
     const trimmed = description.trim()
-    if (!trimmed || creating) return
-    setCreating(true)
-    setCreateError('')
-    try {
+    if (!trimmed) return
+    return creation.run(async () => {
       const todo = await createTodo(trimmed)
       setTodos((todos) => [...todos, todo])
       setDescription('')
       setFilter('all')
-    } catch (error) {
-      setCreateError(errorMessage(error))
-    } finally {
-      setCreating(false)
-    }
+    })
   }
 
   async function editTodo(id: string, changes: TodoChanges) {
@@ -288,6 +274,8 @@ export function App() {
     setTodos((todos) => todos.map((todo) => todo.id === id ? updated : todo))
   }
 
+  const orderingLocked = order.pending || !!draggingId
+  const createLocked = creation.pending || loading || !!loadError || orderingLocked
   const remaining = todos.filter((todo) => !todo.completed).length
   const visible = todos.filter((todo) =>
     filter === 'all' || (filter === 'completed' ? todo.completed : !todo.completed))
@@ -306,12 +294,12 @@ export function App() {
           <div class="create-row">
             <input id="new-todo" placeholder="e.g. Pick up groceries"
               value={description} onInput={(event) => setDescription(event.currentTarget.value)}
-              maxLength={255} required disabled={creating || loading || !!loadError || reordering || !!draggingId} />
-            <button type="submit" disabled={creating || loading || !!loadError || reordering || !!draggingId || !description.trim()}>
-              {creating ? 'Adding…' : 'Add todo'}
+              maxLength={255} required disabled={createLocked} />
+            <button type="submit" disabled={createLocked || !description.trim()}>
+              {creation.pending ? 'Adding…' : 'Add todo'}
             </button>
           </div>
-          {createError && <p class="error" role="alert">{createError}</p>}
+          {creation.error && <p class="error" role="alert">{creation.error}</p>}
         </form>
 
         {loading ? <p class="list-message" role="status">Loading your todos…</p> : loadError ? (
@@ -325,19 +313,19 @@ export function App() {
               <p class="remaining" role="status">{remaining} {remaining === 1 ? 'todo' : 'todos'} left</p>
               <div class="filters" role="group" aria-label="Filter todos">
                 {(['all', 'active', 'completed'] as const).map((value) => (
-                  <button key={value} type="button" disabled={reordering || !!draggingId} aria-pressed={filter === value}
-                    onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'Active' : 'Completed'}</button>
+                  <button key={value} type="button" disabled={orderingLocked} aria-pressed={filter === value}
+                    onClick={() => setFilter(value)}>{value[0].toUpperCase() + value.slice(1)}</button>
                 ))}
               </div>
             </div>
             <p id="reorder-help" class="sr-only">Drag a handle to reorder, or use Arrow Up and Arrow Down. Escape cancels dragging.</p>
             <p class="order-status" role="status">{orderStatus}</p>
-            {orderError && <p class="error reorder-error" role="alert">{orderError}</p>}
+            {order.error && <p class="error reorder-error" role="alert">{order.error}</p>}
             {visible.length ? (
               <ul ref={listRef} class={`todo-list ${draggingId && dropBefore === null ? 'insert-end' : ''}`}
-                aria-busy={reordering}>
+                aria-busy={order.pending}>
                 {visible.map((todo) => <TodoItem key={todo.id} todo={todo} onUpdate={editTodo}
-                  locked={reordering || creating || (!!draggingId && draggingId !== todo.id)}
+                  locked={order.pending || creation.pending || (!!draggingId && draggingId !== todo.id)}
                   dragging={draggingId === todo.id} insertBefore={!!draggingId && dropBefore === todo.id}
                   handleEvents={handleEvents(todo.id)} />)}
               </ul>
