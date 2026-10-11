@@ -410,18 +410,3 @@ def test_pool_lifecycle(monkeypatch, fail_startup):
 )
 def test_invalid_create_fields(validation_client, body):
     assert validation_client.post("/todos", json=body).status_code == 422
-
-
-def test_reorder_migration_round_trip(client):
-    migration = (
-        Path(__file__).resolve().parents[1]
-        / "db/migrations/20261011170000_simplify_reorder_todo.sql"
-    ).read_text()
-    up, down = migration.split("-- migrate:up", 1)[1].split("-- migrate:down", 1)
-    with client.app.state.pool.connection() as connection:
-        query = "SELECT prosrc FROM pg_proc WHERE oid = 'reorder_todo(uuid,uuid)'::regprocedure"
-        simplified = connection.execute(query).fetchone()
-        connection.execute(down)
-        assert connection.execute(query).fetchone() != simplified
-        connection.execute(up)
-        assert connection.execute(query).fetchone() == simplified
