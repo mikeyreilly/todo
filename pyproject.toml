@@ -7,7 +7,9 @@ authors = [
     { name = "Michael Reilly", email = "mikeyreilly@gmail.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "fastapi[standard]>=0.143.0",
+]
 
 [project.scripts]
 todo = "todo:main"
@@ -15,3 +17,8 @@ todo = "todo:main"
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "poethepoet>=0.48.0",
+]
