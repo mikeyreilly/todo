@@ -9,7 +9,7 @@ DECLARE
     moving todo%ROWTYPE;
     target todo%ROWTYPE;
     previous_priority bigint;
-    next_id uuid;
+    previous_id uuid;
     new_priority numeric;
 BEGIN
     -- Use the same transaction-level lock as creation. Acquire it before reads
@@ -28,18 +28,13 @@ BEGIN
         END IF;
     END IF;
 
-    -- If we are moving the todo to where it already is, just return it
-    SELECT id INTO next_id FROM todo
-    WHERE (priority, id) > (moving.priority, moving.id)
-    ORDER BY priority, id LIMIT 1;
-    IF p_before_id = p_todo_id OR next_id IS NOT DISTINCT FROM p_before_id THEN
+    -- The destination's predecessor also tells us whether this is a no-op.
+    SELECT id, priority INTO previous_id, previous_priority FROM todo
+    WHERE p_before_id IS NULL OR (priority, id) < (target.priority, target.id)
+    ORDER BY priority DESC, id DESC LIMIT 1;
+    IF p_before_id = p_todo_id OR previous_id = p_todo_id THEN
         RETURN moving;
     END IF;
-
-    SELECT priority INTO previous_priority FROM todo
-    WHERE id <> p_todo_id
-      AND (p_before_id IS NULL OR (priority, id) < (target.priority, target.id))
-    ORDER BY priority DESC, id DESC LIMIT 1;
 
     -- Numeric arithmetic avoids overflowing bigint before deciding to rebalance.
     IF p_before_id IS NULL THEN
@@ -54,22 +49,17 @@ BEGIN
         AND target.priority::numeric - previous_priority::numeric <= 1)
        OR new_priority < -9223372036854775808::numeric
        OR new_priority > 9223372036854775807::numeric THEN
-        -- Place the moving item between ranked neighbors, then restore spacing
-        -- in one set-based update (including deterministic ordering for ties).
-        WITH remaining AS (
-            SELECT id, row_number() OVER (ORDER BY priority, id) AS position
+        -- Give the moving item its target's sort keys, sorting just before it.
+        -- A null target sorts last for appends. All other items keep their order.
+        WITH positioned AS (
+            SELECT id, priority AS sort_priority, id AS sort_id, 1 AS side
             FROM todo WHERE id <> p_todo_id
-        ), insertion AS (
-            SELECT COALESCE(
-                (SELECT position FROM remaining WHERE id = p_before_id),
-                (SELECT count(*) + 1 FROM remaining)
-            ) AS position
-        ), positioned AS (
-            SELECT id, position * 2 AS slot FROM remaining
             UNION ALL
-            SELECT p_todo_id, position * 2 - 1 FROM insertion
+            SELECT p_todo_id, target.priority, target.id, 0
         ), spaced AS (
-            SELECT id, row_number() OVER (ORDER BY slot) * 1024 AS priority
+            SELECT id, row_number() OVER (
+                ORDER BY sort_priority NULLS LAST, sort_id, side
+            ) * 1024 AS priority
             FROM positioned
         )
         UPDATE todo SET priority = spaced.priority

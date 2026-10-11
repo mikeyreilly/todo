@@ -322,3 +322,106 @@ def test_reorder_function_returns_single_todo(client):
             "FROM pg_proc WHERE oid = 'reorder_todo(uuid,uuid)'::regprocedure"
         ).fetchone()
     assert row == {"proretset": False, "returns_todo": True}
+
+
+@pytest.mark.parametrize(
+    "priorities",
+    [
+        [1024, 2048, 3072, 4096],
+        [1, 2, 3, 4],
+        [1, 1, 1, 1],
+        [1, 2, 2, 3],
+        [-4096, -3072, -2048, -1024],
+        [-(2**63) + i for i in range(4)],
+        [2**63 - 4 + i for i in range(4)],
+    ],
+)
+def test_every_reorder_destination(client, priorities):
+    todos = create_ordered_todos(client)
+    original = {todo["id"]: priority for todo, priority in zip(todos, priorities)}
+    ordered = sorted(todos, key=lambda todo: (original[todo["id"]], todo["id"]))
+    for moving in ordered:
+        for target in [*ordered, None]:
+            with client.app.state.pool.connection() as connection:
+                for todo_id, priority in original.items():
+                    connection.execute(
+                        "UPDATE todo SET priority = %s WHERE id = %s",
+                        (priority, todo_id),
+                    )
+            expected = ordered.copy()
+            if target != moving:
+                expected.remove(moving)
+                expected.insert(expected.index(target) if target else len(expected), moving)
+            response = client.patch(
+                f"/todos/{moving['id']}/order",
+                json={"before_id": target["id"] if target else None},
+            )
+            assert response.status_code == 200
+            assert response.json() == moving
+            assert client.get("/todos").json() == expected
+            if expected == ordered:
+                assert read_priorities(client) == original
+
+
+def test_reorder_missing_errors(client):
+    todo = client.post("/todos", json={"description": "First"}).json()
+    missing = str(uuid4())
+    for moving, target, message in [
+        (missing, todo["id"], "Todo not found"),
+        (missing, missing, "Todo not found"),
+        (todo["id"], missing, "Target todo not found"),
+    ]:
+        response = client.patch(
+            f"/todos/{moving}/order", json={"before_id": target}
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": message}
+    assert client.get("/todos").json() == [todo]
+
+
+@pytest.mark.parametrize("fail_startup", [False, True])
+def test_pool_lifecycle(monkeypatch, fail_startup):
+    from unittest.mock import MagicMock
+
+    pool = MagicMock()
+    if fail_startup:
+        pool.open.side_effect = RuntimeError("Database unavailable")
+    monkeypatch.setattr("todo.main.create_pool", lambda settings: pool)
+    app = create_app(Settings(database_url="postgresql://unused"))
+    if fail_startup:
+        with pytest.raises(RuntimeError, match="Database unavailable"):
+            with TestClient(app):
+                pass
+    else:
+        with TestClient(app):
+            assert app.state.pool is pool
+            pool.close.assert_not_called()
+    pool.open.assert_called_once_with(wait=True, timeout=10)
+    pool.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"description": "Valid", "unknown": True},
+        {"description": "Valid", "completed": None},
+    ],
+)
+def test_invalid_create_fields(validation_client, body):
+    assert validation_client.post("/todos", json=body).status_code == 422
+
+
+def test_reorder_migration_round_trip(client):
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "db/migrations/20261011170000_simplify_reorder_todo.sql"
+    ).read_text()
+    up, down = migration.split("-- migrate:up", 1)[1].split("-- migrate:down", 1)
+    with client.app.state.pool.connection() as connection:
+        query = "SELECT prosrc FROM pg_proc WHERE oid = 'reorder_todo(uuid,uuid)'::regprocedure"
+        simplified = connection.execute(query).fetchone()
+        connection.execute(down)
+        assert connection.execute(query).fetchone() != simplified
+        connection.execute(up)
+        assert connection.execute(query).fetchone() == simplified

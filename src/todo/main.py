@@ -1,11 +1,11 @@
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException
 from psycopg import Connection
 from psycopg.errors import NoDataFound
-from pydantic import BaseModel, ConfigDict, StringConstraints, model_validator
+from pydantic import BaseModel, StringConstraints, model_validator
 
 from todo.database import Settings, create_pool, get_connection
 
@@ -15,16 +15,12 @@ Description = Annotated[
 Database = Annotated[Connection, Depends(get_connection, scope="function")]
 
 
-class TodoCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class TodoCreate(BaseModel, extra="forbid"):
     description: Description
     completed: bool = False
 
 
-class TodoUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class TodoUpdate(BaseModel, extra="forbid"):
     description: Description | None = None
     completed: bool | None = None
 
@@ -37,9 +33,7 @@ class TodoUpdate(BaseModel):
         return self
 
 
-class TodoOrder(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class TodoOrder(BaseModel, extra="forbid"):
     before_id: UUID | None
 
 
@@ -52,13 +46,10 @@ class Todo(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        pool = create_pool(settings or Settings())
-        try:
+        with closing(create_pool(settings or Settings())) as pool:
             pool.open(wait=True, timeout=10)
             app.state.pool = pool
             yield
-        finally:
-            pool.close()
 
     app = FastAPI(title="Todo API", lifespan=lifespan)
 
@@ -68,7 +59,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "SELECT id, description, completed FROM todo ORDER BY priority, id"
         ).fetchall()
 
-    @app.post("/todos", response_model=Todo, status_code=status.HTTP_201_CREATED)
+    @app.post("/todos", response_model=Todo, status_code=201)
     def create_todo(todo: TodoCreate, connection: Database):
         # Serialize writers until commit so concurrent creates see the latest max.
         connection.execute("LOCK TABLE todo IN SHARE ROW EXCLUSIVE MODE")
