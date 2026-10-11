@@ -20,15 +20,6 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
--- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.schema_migrations (
-    version character varying NOT NULL
-);
-
-
---
 -- Name: todo; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -44,10 +35,9 @@ CREATE TABLE public.todo (
 -- Name: reorder_todo(uuid, uuid); Type: FUNCTION; Schema: public; Owner: -
 --
 
-CREATE FUNCTION public.reorder_todo(p_todo_id uuid, p_before_id uuid)
-RETURNS public.todo
-LANGUAGE plpgsql
-AS $$
+CREATE FUNCTION public.reorder_todo(p_todo_id uuid, p_before_id uuid) RETURNS public.todo
+    LANGUAGE plpgsql
+    AS $$
 DECLARE
     moving todo%ROWTYPE;
     target todo%ROWTYPE;
@@ -71,6 +61,7 @@ BEGIN
         END IF;
     END IF;
 
+    -- If we are moving the todo to where it already is, just return it
     SELECT id INTO next_id FROM todo
     WHERE (priority, id) > (moving.priority, moving.id)
     ORDER BY priority, id LIMIT 1;
@@ -124,6 +115,15 @@ BEGIN
     RETURN moving;
 END;
 $$;
+
+
+--
+-- Name: schema_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.schema_migrations (
+    version character varying NOT NULL
+);
 
 
 --

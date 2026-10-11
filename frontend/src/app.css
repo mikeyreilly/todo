@@ -51,3 +51,18 @@ h2 { font-size: 1.2rem; font-weight: 600; margin-bottom: 8px; }
   .edit-form { flex-direction: column; }
   .edit-actions button { flex: 1; }
 }
+
+.drag-handle { display: flex; align-items: center; justify-content: center; flex: 0 0 28px; height: 36px; padding: 0; color: #7b887e; background: transparent; cursor: grab; touch-action: none; user-select: none; }
+.drag-handle:hover:not(:disabled) { color: #285a49; background: #edf2e9; }
+.drag-handle:active { cursor: grabbing; }
+.drag-handle:focus-visible { outline: 2px solid #285a49; outline-offset: 2px; }
+.drag-handle:disabled { cursor: not-allowed; opacity: .45; }
+.todo-item { position: relative; }
+.is-dragging { opacity: .45; background: #f3f6f0; }
+.todo-list { position: relative; padding-bottom: 8px; }
+.insert-before::before, .insert-end::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px; background: #285a49; box-shadow: 0 0 0 2px #fff; pointer-events: none; }
+.insert-before::before { top: -2px; }
+.insert-end::after { bottom: 0; }
+.reorder-error { margin: 0 28px 16px; }
+.order-status { position: fixed; left: max(16px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; margin: 0; padding: 8px 12px; max-width: calc(100vw - 32px); border: 1px solid #dce3da; border-radius: 9px; background: #f3f6f0; color: #64756e; font-size: .8rem; box-shadow: 0 2px 8px #243c3608; pointer-events: none; }
+.order-status:empty { display: none; }

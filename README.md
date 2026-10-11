@@ -82,8 +82,13 @@ npm --prefix frontend run dev
 
 Open the local URL printed by Vite (usually http://localhost:5173). The Preact UI
 lists your saved todos, adds new ones, edits descriptions, and toggles completion.
-You can filter by All, Active, or Completed. Failed requests show errors without
-discarding your draft or changing the saved todo.
+You can filter by All, Active, or Completed. Drag the grip on the left of a todo
+to reorder it; the green insertion line shows where it will land. Mouse and touch
+are supported, with scrolling near the viewport edges. You can also focus the
+handle and use Arrow Up/Down; Escape cancels a drag. Drops are saved to the backend.
+In filtered lists, drops insert before the indicated visible todo; dropping at the
+bottom moves the item to the end of the full list without removing hidden todos.
+Failed requests show errors without discarding your draft or changing saved order.
 
 Vite proxies `/todos` requests to `http://127.0.0.1:8000`, so local development
 needs no backend CORS changes. If you change the backend port, update

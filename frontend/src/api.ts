@@ -46,3 +46,10 @@ export const updateTodo = (id: string, changes: TodoChanges) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(changes),
   })
+
+export const reorderTodo = (id: string, beforeId: string | null) =>
+  request<Todo>(`/todos/${encodeURIComponent(id)}/order`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ before_id: beforeId }),
+  })

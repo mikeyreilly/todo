@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'preact/hooks'
-import { createTodo, listTodos, updateTodo } from './api'
+import type { JSX } from 'preact'
+import { useEffect, useRef, useState } from 'preact/hooks'
+import { createTodo, listTodos, reorderTodo, updateTodo } from './api'
 import type { Todo, TodoChanges } from './api'
 import './app.css'
 
@@ -7,8 +8,24 @@ type Filter = 'all' | 'active' | 'completed'
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : 'Something went wrong. Please try again.'
 
-function TodoItem({ todo, onUpdate }: {
+type Drag = {
+  id: string
+  pointerId: number
+  x: number
+  y: number
+  active: boolean
+  beforeId: string | null | undefined
+}
+
+type HandleEvents = Pick<JSX.HTMLAttributes<HTMLButtonElement>,
+  'onPointerDown' | 'onPointerMove' | 'onPointerUp' | 'onPointerCancel' | 'onLostPointerCapture' | 'onKeyDown'>
+
+function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents }: {
   todo: Todo
+  locked: boolean
+  dragging: boolean
+  insertBefore: boolean
+  handleEvents: HandleEvents
   onUpdate: (id: string, changes: TodoChanges) => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
@@ -37,13 +54,22 @@ function TodoItem({ todo, onUpdate }: {
   }
 
   return (
-    <li class={`todo-item ${todo.completed ? 'is-completed' : ''}`} aria-busy={saving}>
+    <li data-todo-id={todo.id}
+      class={`todo-item ${todo.completed ? 'is-completed' : ''} ${dragging ? 'is-dragging' : ''} ${insertBefore ? 'insert-before' : ''}`}
+      aria-busy={saving}>
       <div class="todo-row">
+        <button type="button" class="drag-handle" disabled={saving || editing || locked}
+          aria-label={`Reorder ${todo.description}`} aria-describedby="reorder-help"
+          {...handleEvents}>
+          <svg width="16" height="22" viewBox="0 0 16 22" fill="currentColor" aria-hidden="true">
+            {[5, 11, 17].map((y) => <g key={y}><circle cx="5" cy={y} r="1.5" /><circle cx="11" cy={y} r="1.5" /></g>)}
+          </svg>
+        </button>
         <input
           class="completion"
           type="checkbox"
           checked={todo.completed}
-          disabled={saving || editing}
+          disabled={saving || editing || locked}
           aria-label={`Mark ${todo.description} ${todo.completed ? 'incomplete' : 'complete'}`}
           onChange={() => void save({ completed: !todo.completed })}
         />
@@ -73,7 +99,7 @@ function TodoItem({ todo, onUpdate }: {
         ) : (
           <>
             <span class="todo-description">{todo.description}</span>
-            <button class="text-button" type="button" disabled={saving}
+            <button class="text-button" type="button" disabled={saving || locked}
               aria-label={`Edit ${todo.description}`}
               onClick={() => {
                 setDescription(todo.description)
@@ -99,6 +125,135 @@ export function App() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined)
+  const [reordering, setReordering] = useState(false)
+  const [orderError, setOrderError] = useState('')
+  const [orderStatus, setOrderStatus] = useState('')
+  const listRef = useRef<HTMLUListElement>(null)
+  const dragRef = useRef<Drag | null>(null)
+  const reorderPending = useRef(false)
+
+  function cancelDrag() {
+    dragRef.current = null
+    setDraggingId(null)
+    setDropBefore(undefined)
+  }
+
+  function updateDropPosition(drag: Drag) {
+    const list = listRef.current
+    if (!list) return
+    const bounds = list.getBoundingClientRect()
+    if (drag.x < bounds.left || drag.x > bounds.right ||
+        drag.y < bounds.top - 16 || drag.y > bounds.bottom + 16) {
+      drag.beforeId = undefined
+    } else {
+      const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-todo-id]'))
+        .filter((row) => row.dataset.todoId !== drag.id)
+      drag.beforeId = rows.find((row) => {
+        const rect = row.getBoundingClientRect()
+        return drag.y < rect.top + rect.height / 2
+      })?.dataset.todoId ?? null
+    }
+    setDropBefore(drag.beforeId)
+  }
+
+  // Pointer capture keeps events on the handle; scroll near viewport edges
+  // so long lists can be reordered without releasing the mouse/finger.
+  useEffect(() => {
+    if (!draggingId) return
+    let frame: number
+    function scroll() {
+      const drag = dragRef.current
+      const bounds = listRef.current?.getBoundingClientRect()
+      if (!drag?.active || !bounds) return
+      if (drag.x >= bounds.left && drag.x <= bounds.right) {
+        const edge = 56
+        const speed = drag.y < edge ? -12 : drag.y > window.innerHeight - edge ? 12 : 0
+        if ((speed < 0 && window.scrollY > 0) ||
+            (speed > 0 && window.scrollY + window.innerHeight < document.documentElement.scrollHeight)) {
+          window.scrollBy(0, speed)
+          updateDropPosition(drag)
+        }
+      }
+      frame = requestAnimationFrame(scroll)
+    }
+    frame = requestAnimationFrame(scroll)
+    return () => cancelAnimationFrame(frame)
+  }, [draggingId])
+
+  async function moveTodo(id: string, beforeId: string | null) {
+    if (reorderPending.current) return
+    const index = todos.findIndex((todo) => todo.id === id)
+    if (index < 0 || beforeId === id || (todos[index + 1]?.id ?? null) === beforeId) return
+    reorderPending.current = true
+    setReordering(true)
+    setOrderError('')
+    setOrderStatus('Saving order…')
+    try {
+      await reorderTodo(id, beforeId)
+      setTodos((current) => {
+        const moving = current.find((todo) => todo.id === id)
+        if (!moving) return current
+        const rest = current.filter((todo) => todo.id !== id)
+        const destination = beforeId === null ? rest.length : rest.findIndex((todo) => todo.id === beforeId)
+        if (destination < 0) return current
+        return [...rest.slice(0, destination), moving, ...rest.slice(destination)]
+      })
+      setOrderStatus('Order saved.')
+    } catch (error) {
+      setOrderError(errorMessage(error))
+      setOrderStatus('')
+    } finally {
+      reorderPending.current = false
+      setReordering(false)
+    }
+  }
+
+  function handleEvents(id: string): HandleEvents {
+    return {
+      onPointerDown(event) {
+        if (event.button !== 0 || creating || reorderPending.current || dragRef.current) return
+        dragRef.current = {
+          id, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+          active: false, beforeId: undefined,
+        }
+        event.currentTarget.setPointerCapture(event.pointerId)
+      },
+      onPointerMove(event) {
+        const drag = dragRef.current
+        const list = listRef.current
+        if (!drag || drag.pointerId !== event.pointerId || !list) return
+        if (!drag.active && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return
+        drag.active = true
+        setDraggingId(id)
+        setOrderStatus('')
+        event.preventDefault()
+        drag.x = event.clientX
+        drag.y = event.clientY
+        updateDropPosition(drag)
+      },
+      onPointerUp(event) {
+        const drag = dragRef.current
+        if (!drag || drag.pointerId !== event.pointerId) return
+        cancelDrag()
+        if (drag.active && drag.beforeId !== undefined) void moveTodo(id, drag.beforeId)
+      },
+      onPointerCancel: cancelDrag,
+      onLostPointerCapture: cancelDrag,
+      onKeyDown(event) {
+        if (event.key === 'Escape') { cancelDrag(); return }
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+        event.preventDefault()
+        if (dragRef.current) return
+        const index = visible.findIndex((todo) => todo.id === id)
+        if (event.key === 'ArrowUp' && index > 0) void moveTodo(id, visible[index - 1].id)
+        if (event.key === 'ArrowDown' && index < visible.length - 1) {
+          void moveTodo(id, visible[index + 2]?.id ?? null)
+        }
+      },
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -151,8 +306,8 @@ export function App() {
           <div class="create-row">
             <input id="new-todo" placeholder="e.g. Pick up groceries"
               value={description} onInput={(event) => setDescription(event.currentTarget.value)}
-              maxLength={255} required disabled={creating || loading || !!loadError} />
-            <button type="submit" disabled={creating || loading || !!loadError || !description.trim()}>
+              maxLength={255} required disabled={creating || loading || !!loadError || reordering || !!draggingId} />
+            <button type="submit" disabled={creating || loading || !!loadError || reordering || !!draggingId || !description.trim()}>
               {creating ? 'Adding…' : 'Add todo'}
             </button>
           </div>
@@ -170,14 +325,21 @@ export function App() {
               <p class="remaining" role="status">{remaining} {remaining === 1 ? 'todo' : 'todos'} left</p>
               <div class="filters" role="group" aria-label="Filter todos">
                 {(['all', 'active', 'completed'] as const).map((value) => (
-                  <button key={value} type="button" aria-pressed={filter === value}
+                  <button key={value} type="button" disabled={reordering || !!draggingId} aria-pressed={filter === value}
                     onClick={() => setFilter(value)}>{value === 'all' ? 'All' : value === 'active' ? 'Active' : 'Completed'}</button>
                 ))}
               </div>
             </div>
+            <p id="reorder-help" class="sr-only">Drag a handle to reorder, or use Arrow Up and Arrow Down. Escape cancels dragging.</p>
+            <p class="order-status" role="status">{orderStatus}</p>
+            {orderError && <p class="error reorder-error" role="alert">{orderError}</p>}
             {visible.length ? (
-              <ul class="todo-list">
-                {visible.map((todo) => <TodoItem key={todo.id} todo={todo} onUpdate={editTodo} />)}
+              <ul ref={listRef} class={`todo-list ${draggingId && dropBefore === null ? 'insert-end' : ''}`}
+                aria-busy={reordering}>
+                {visible.map((todo) => <TodoItem key={todo.id} todo={todo} onUpdate={editTodo}
+                  locked={reordering || creating || (!!draggingId && draggingId !== todo.id)}
+                  dragging={draggingId === todo.id} insertBefore={!!draggingId && dropBefore === todo.id}
+                  handleEvents={handleEvents(todo.id)} />)}
               </ul>
             ) : (
               <div class="empty-state">

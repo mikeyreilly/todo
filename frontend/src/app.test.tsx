@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/preact'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/preact'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './app'
@@ -15,6 +15,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 async function renderList(todos = [todo]) {
@@ -136,4 +137,140 @@ describe('Todo app', () => {
     expect((screen.getByLabelText('Edit description') as HTMLInputElement).value).toBe('Buy bread')
     expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(false)
   })
+})
+
+
+const second = { ...todo, id: 'second-id', description: 'Walk dog' }
+const third = { ...todo, id: 'third-id', description: 'Read book' }
+const ordered = [todo, second, third]
+
+function mockDragLayout() {
+  // jsdom does not implement pointer capture; real browsers route moves/up
+  // back to the handle while the pointer is outside its bounds.
+  screen.getAllByRole('button', { name: /^Reorder / }).forEach((handle) => {
+    handle.setPointerCapture = vi.fn()
+  })
+  const list = screen.getByRole('list')
+  vi.spyOn(list, 'getBoundingClientRect').mockReturnValue(
+    { left: 0, right: 500, top: 100, bottom: 280, height: 180 } as DOMRect)
+  screen.getAllByRole('listitem').forEach((row, i) => {
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(
+      { left: 0, right: 500, top: 100 + i * 60, bottom: 160 + i * 60, height: 60 } as DOMRect)
+  })
+}
+
+function startDrag(name: string, startY: number, destinationY: number, x = 20) {
+  const handle = screen.getByRole('button', { name: `Reorder ${name}` })
+  fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientX: 20, clientY: startY })
+  fireEvent.pointerMove(handle, { pointerId: 1, clientX: x, clientY: destinationY })
+  return handle
+}
+
+function descriptions() {
+  return screen.getAllByRole('listitem').map((row) => row.querySelector('.todo-description')?.textContent)
+}
+
+describe('Reordering todos', () => {
+  it.each([
+    [third, 250, 101, todo.id, ['Read book', 'Buy milk', 'Walk dog']],
+    [todo, 130, 210, third.id, ['Walk dog', 'Buy milk', 'Read book']],
+    [todo, 130, 279, null, ['Walk dog', 'Read book', 'Buy milk']],
+  ] as const)('shows the insertion position and persists a move for %s', async (moving, start, end, beforeId, expected) => {
+    await renderList(ordered)
+    mockDragLayout()
+    fetchMock.mockResolvedValueOnce(response(moving))
+    const handle = startDrag(moving.description, start, end)
+    expect(handle.closest('li')?.classList.contains('is-dragging')).toBe(true)
+    const indicator = beforeId === null ? screen.getByRole('list') :
+      screen.getByRole('button', { name: `Reorder ${ordered.find((item) => item.id === beforeId)?.description}` }).closest('li')!
+    expect(indicator.classList.contains(beforeId === null ? 'insert-end' : 'insert-before')).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    await waitFor(() => expect(descriptions()).toEqual(expected))
+    expect(fetchMock.mock.calls[1]).toEqual([`/todos/${moving.id}/order`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ before_id: beforeId }),
+    }])
+    expect(document.querySelector('.insert-before, .insert-end, .is-dragging')).toBeNull()
+  })
+
+  it('preserves order and shows an error when a drop cannot be saved', async () => {
+    await renderList(ordered)
+    mockDragLayout()
+    fetchMock.mockResolvedValueOnce(response({ detail: 'Could not save order' }, 503))
+    const handle = startDrag(third.description, 250, 101)
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not save order')
+    expect(descriptions()).toEqual(ordered.map((item) => item.description))
+    expect((handle as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it.each(['Escape', 'pointerCancel', 'lostCapture', 'outside', 'no-op', 'click'])('does not save a %s drag', async (kind) => {
+    await renderList(ordered)
+    mockDragLayout()
+    const handle = startDrag(todo.description, 130,
+      kind === 'click' ? 131 : kind === 'no-op' ? 170 : 279, kind === 'outside' ? 600 : 20)
+    if (kind === 'Escape') fireEvent.keyDown(handle, { key: 'Escape' })
+    if (kind === 'pointerCancel') fireEvent.pointerCancel(handle, { pointerId: 1 })
+    if (kind === 'lostCapture') fireEvent.lostPointerCapture(handle, { pointerId: 1 })
+    fireEvent.pointerUp(handle, { pointerId: 1 })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('.insert-before, .insert-end, .is-dragging')).toBeNull()
+    expect(descriptions()).toEqual(ordered.map((item) => item.description))
+  })
+
+  it('supports keyboard reordering from the handle', async () => {
+    const user = await renderList(ordered)
+    const handle = screen.getByRole('button', { name: 'Reorder Walk dog' })
+    handle.focus()
+    fetchMock.mockResolvedValueOnce(response(second))
+    await user.keyboard('{ArrowUp}')
+    await waitFor(() => expect(descriptions()).toEqual(['Walk dog', 'Buy milk', 'Read book']))
+    expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(JSON.stringify({ before_id: todo.id }))
+    fetchMock.mockResolvedValueOnce(response(second))
+    await user.keyboard('{ArrowDown}')
+    await waitFor(() => expect(descriptions()).toEqual(['Buy milk', 'Walk dog', 'Read book']))
+    expect(fetchMock.mock.calls[2]?.[1]?.body).toBe(JSON.stringify({ before_id: third.id }))
+  })
+
+  it('reorders a filtered list without losing hidden todos', async () => {
+    const user = await renderList([todo, { ...second, completed: true }, third])
+    await user.click(screen.getByRole('button', { name: 'Active', exact: true }))
+    fetchMock.mockResolvedValueOnce(response(third))
+    const handle = screen.getByRole('button', { name: 'Reorder Read book' })
+    handle.focus()
+    await user.keyboard('{ArrowUp}')
+    await waitFor(() => expect(descriptions()).toEqual(['Read book', 'Buy milk']))
+    await user.click(screen.getByRole('button', { name: 'All', exact: true }))
+    expect(descriptions()).toEqual(['Read book', 'Buy milk', 'Walk dog'])
+  })
+
+  it('disables handles while saving and prevents overlapping moves', async () => {
+    await renderList(ordered)
+    let finish!: (value: Response) => void
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { finish = resolve }))
+    const handle = screen.getByRole('button', { name: 'Reorder Read book' })
+    fireEvent.keyDown(handle, { key: 'ArrowUp' })
+    await waitFor(() => expect((handle as HTMLButtonElement).disabled).toBe(true))
+    expect(screen.getByText('Saving order…')).toBeTruthy()
+    fireEvent.keyDown(handle, { key: 'ArrowUp' })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(descriptions()).toEqual(ordered.map((item) => item.description))
+    finish(response(third))
+    await waitFor(() => expect(descriptions()).toEqual(['Buy milk', 'Read book', 'Walk dog']))
+    expect((handle as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('supports touch pointer dragging', async () => {
+    await renderList(ordered)
+    mockDragLayout()
+    fetchMock.mockResolvedValueOnce(response(third))
+    const handle = screen.getByRole('button', { name: 'Reorder Read book' })
+    fireEvent.pointerDown(handle, { pointerType: 'touch', pointerId: 2, button: 0, clientX: 20, clientY: 250 })
+    fireEvent.pointerMove(handle, { pointerType: 'touch', pointerId: 2, clientX: 20, clientY: 101 })
+    expect(document.querySelector('.insert-before')).toBeTruthy()
+    fireEvent.pointerUp(handle, { pointerType: 'touch', pointerId: 2 })
+    await waitFor(() => expect(descriptions()).toEqual(['Read book', 'Buy milk', 'Walk dog']))
+  })
+
 })
