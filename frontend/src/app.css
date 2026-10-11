@@ -19,8 +19,8 @@ button:hover:not(:disabled) { background: #1c4436; }
 .filters button { background: transparent; color: #64756e; padding: 7px 11px; font-size: .75rem; border-radius: 6px; }
 .filters button[aria-pressed='true'] { background: #fff; color: #285a49; box-shadow: 0 1px 3px #243c3615; }
 .filters button:hover { background: #e4ece2; }
-.todo-list { list-style: none; padding: 0; margin: 0 28px 16px; }
-.todo-item { padding: 17px 0; border-top: 1px solid #edf0e9; }
+.todo-list { position: relative; list-style: none; padding: 0 0 8px; margin: 0 28px 16px; }
+.todo-item { position: relative; padding: 17px 0; border-top: 1px solid #edf0e9; }
 .todo-row { display: flex; align-items: center; gap: 14px; }
 .completion { flex: 0 0 auto; width: 20px; height: 20px; margin: 0; accent-color: #285a49; cursor: pointer; }
 .completion:disabled { cursor: not-allowed; }
@@ -57,12 +57,10 @@ h2 { font-size: 1.2rem; font-weight: 600; margin-bottom: 8px; }
 .drag-handle:active { cursor: grabbing; }
 .drag-handle:focus-visible { outline: 2px solid #285a49; outline-offset: 2px; }
 .drag-handle:disabled { cursor: not-allowed; opacity: .45; }
-.todo-item { position: relative; }
 .is-dragging { opacity: .45; background: #f3f6f0; }
-.todo-list { position: relative; padding-bottom: 8px; }
 .insert-before::before, .insert-end::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; border-radius: 3px; background: #285a49; box-shadow: 0 0 0 2px #fff; pointer-events: none; }
 .insert-before::before { top: -2px; }
 .insert-end::after { bottom: 0; }
 .reorder-error { margin: 0 28px 16px; }
-.order-status { position: fixed; left: max(16px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; margin: 0; padding: 8px 12px; max-width: calc(100vw - 32px); border: 1px solid #dce3da; border-radius: 9px; background: #f3f6f0; color: #64756e; font-size: .8rem; box-shadow: 0 2px 8px #243c3608; pointer-events: none; }
+.order-status { position: fixed; left: max(16px, env(safe-area-inset-left)); bottom: max(16px, env(safe-area-inset-bottom)); z-index: 10; padding: 8px 12px; max-width: calc(100vw - 32px); border: 1px solid #dce3da; border-radius: 9px; background: #f3f6f0; color: #64756e; font-size: .8rem; box-shadow: 0 2px 8px #243c3608; pointer-events: none; }
 .order-status:empty { display: none; }
