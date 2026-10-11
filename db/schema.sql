@@ -34,7 +34,8 @@ CREATE TABLE public.schema_migrations (
 
 CREATE TABLE public.todo (
     id uuid DEFAULT uuidv7() NOT NULL,
-    description character varying(255) NOT NULL
+    description character varying(255) NOT NULL,
+    completed boolean DEFAULT false NOT NULL
 );
 
 
@@ -66,4 +67,5 @@ ALTER TABLE ONLY public.todo
 --
 
 INSERT INTO public.schema_migrations (version) VALUES
-    ('20261011103550');
+    ('20261011103550'),
+    ('20261011103551');
