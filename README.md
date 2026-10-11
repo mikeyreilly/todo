@@ -57,9 +57,34 @@ curl -X PATCH http://127.0.0.1:8000/todos/REPLACE_WITH_UUID \
   -d '{"completed":true}'
 ```
 
-This API has no authentication; all callers share the same todo list. The frontend
-is unchanged. For local Vite development, proxy `/todos` to the backend or configure
-CORS before making cross-origin requests directly from the browser.
+This API has no authentication; all callers share the same todo list.
+
+## Frontend
+
+With the backend running, open a second terminal from the repository root:
+
+```sh
+npm --prefix frontend ci
+npm --prefix frontend run dev
+```
+
+Open the local URL printed by Vite (usually http://localhost:5173). The Preact UI
+lists your saved todos, adds new ones, edits descriptions, and toggles completion.
+You can filter by All, Active, or Completed. Failed requests show errors without
+discarding your draft or changing the saved todo.
+
+Vite proxies `/todos` requests to `http://127.0.0.1:8000`, so local development
+needs no backend CORS changes. If you change the backend port, update
+`frontend/vite.config.ts`.
+
+```sh
+npm --prefix frontend test
+npm --prefix frontend run build
+```
+
+The production build is written to `frontend/dist`. For deployment, serve that
+folder and route `/todos` (including `/todos/{id}`) to the FastAPI backend on the
+same origin. The proxy above is a development convenience, not a production server.
 
 ## Tests
 
