@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { listTodos, reorderTodo, updateTodo } from '../src//api'
+import { listTodos, reorderTodo, updateTodo } from '../src/api'
 
 const fetchMock = vi.fn<typeof fetch>()
 beforeEach(() => vi.stubGlobal('fetch', fetchMock.mockReset()))

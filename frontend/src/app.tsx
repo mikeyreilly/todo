@@ -53,6 +53,7 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
   const [description, setDescription] = useState<string | null>(null)
   const editing = description !== null
   const { pending: saving, error, run, reset } = useAction()
+  const disabled = saving || editing || locked
   const save = (changes: TodoChanges) => run(async () => {
     await onUpdate(todo.id, changes)
     setDescription(null)
@@ -67,7 +68,7 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
       class={`todo-item ${todo.completed ? 'is-completed' : ''} ${dragging ? 'is-dragging' : ''} ${insertBefore ? 'insert-before' : ''}`}
       aria-busy={saving}>
       <div class="todo-row">
-        <button type="button" class="drag-handle" disabled={saving || editing || locked}
+        <button type="button" class="drag-handle" disabled={disabled}
           aria-label={`Reorder ${todo.description}`} aria-describedby="reorder-help"
           {...handleEvents}>
           <svg width="16" height="22" viewBox="0 0 16 22" fill="currentColor" aria-hidden="true">
@@ -78,7 +79,7 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
           class="completion"
           type="checkbox"
           checked={todo.completed}
-          disabled={saving || editing || locked}
+          disabled={disabled}
           aria-label={`Mark ${todo.description} ${todo.completed ? 'incomplete' : 'complete'}`}
           onChange={() => void save({ completed: !todo.completed })}
         />
@@ -87,9 +88,8 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
             event.preventDefault()
             if (description.trim()) void save({ description: description.trim() })
           }}>
-            <label class="sr-only" for={`edit-${todo.id}`}>Edit description</label>
             <input
-              id={`edit-${todo.id}`}
+              aria-label="Edit description"
               value={description}
               onInput={(event) => setDescription(event.currentTarget.value)}
               onKeyDown={(event) => { if (event.key === 'Escape' && !saving) cancel() }}
@@ -108,7 +108,7 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
         ) : (
           <>
             <span class="todo-description">{todo.description}</span>
-            <button class="text-button" type="button" disabled={saving || locked}
+            <button class="text-button" type="button" disabled={disabled}
               aria-label={`Edit ${todo.description}`}
               onClick={() => {
                 setDescription(todo.description)
@@ -126,8 +126,8 @@ function TodoItem({ todo, onUpdate, locked, dragging, insertBefore, handleEvents
 
 export function App() {
   const [todos, setTodos] = useState<Todo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState('')
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const loading = loadError === null
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [description, setDescription] = useState('')
   const creation = useAction()
@@ -249,12 +249,14 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
-    setLoadError('')
+    setLoadError(null)
     listTodos(controller.signal)
-      .then((todos) => { if (!controller.signal.aborted) setTodos(todos) })
+      .then((todos) => {
+        if (controller.signal.aborted) return
+        setTodos(todos)
+        setLoadError('')
+      })
       .catch((error) => { if (!controller.signal.aborted) setLoadError(errorMessage(error)) })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [loadAttempt])
 
@@ -337,7 +339,6 @@ export function App() {
           </>
         )}
       </section>
-      
     </main>
   )
 }
